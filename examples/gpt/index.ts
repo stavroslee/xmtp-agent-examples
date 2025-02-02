@@ -1,7 +1,11 @@
 import { ContentTypeText } from "@xmtp/content-type-text";
 import { Client, type XmtpEnv } from "@xmtp/node-sdk";
 import OpenAI from "openai";
-import { createSigner, getEncryptionKeyFromHex } from "@/helpers";
+import { createSigner, getEncryptionKeyFromHex, loadEnv } from "@/helpers";
+
+// Load environment variables from .env.local if it exists, otherwise from .env
+loadEnv({ path: ".env.local" });
+loadEnv();
 
 const { WALLET_KEY, ENCRYPTION_KEY, OPENAI_API_KEY } = process.env;
 

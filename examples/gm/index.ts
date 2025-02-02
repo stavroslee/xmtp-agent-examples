@@ -6,8 +6,12 @@ import {
   type CreateGroupOptions,
   type XmtpEnv,
 } from "@xmtp/node-sdk";
-import { createSigner, getEncryptionKeyFromHex } from "@/helpers";
+import { createSigner, getEncryptionKeyFromHex, loadEnv } from "@/helpers";
 import { ChainListener } from "../../src/chainListener";
+
+// Load environment variables from .env.local if it exists, otherwise from .env
+loadEnv({ path: ".env.local" });
+loadEnv();
 
 const { WALLET_KEY, ENCRYPTION_KEY, ALCHEMY_API_KEY } = process.env;
 
