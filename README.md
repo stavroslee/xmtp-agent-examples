@@ -19,6 +19,7 @@ To run your XMTP agent, you must create a `.env` file with the following variabl
 ```bash
 WALLET_KEY= # the private key of the wallet
 ENCRYPTION_KEY= # encryption key for the local database
+ALCHEMY_API_KEY= # your Alchemy API key for blockchain monitoring
 ```
 
 You can generate random keys with the following command:
@@ -32,7 +33,12 @@ yarn gen:keys
 
 ## Examples
 
-- [gm](/examples/gm/): A simple agent that replies to all text messages with "gm".
+- [gm](/examples/gm/): A multi-purpose agent that supports:
+  - Group chat management
+  - Update group metadata
+  - remove yourself out of a group
+  - Following users and get messages when they send a transaction
+  - requesting a side channel be set up with expiring messages
 - [gpt](/examples/gpt/): An example using GPT API's to answer messages.
 
 > See all the available [examples](/examples/).
