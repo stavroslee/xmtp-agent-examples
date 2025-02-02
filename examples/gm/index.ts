@@ -601,7 +601,7 @@ async function main() {
 
     if (contentLower === "/stopwatching") {
       if (state.chainListener) {
-        await state.chainListener.stopListening();
+        state.chainListener.stopListening();
         state.chainListener = undefined;
         await conversation.send("Stopped watching for transactions.");
       } else {
