@@ -13,7 +13,8 @@ import { ChainListener } from "../../src/chainListener";
 loadEnv({ path: ".env.local" });
 loadEnv();
 
-const { WALLET_KEY, ENCRYPTION_KEY, ALCHEMY_API_KEY } = process.env;
+const { WALLET_KEY, ENCRYPTION_KEY, ALCHEMY_API_KEY, POLL_INTERVAL_SECONDS } =
+  process.env;
 
 if (!WALLET_KEY) {
   throw new Error("WALLET_KEY must be set");
@@ -25,6 +26,22 @@ if (!ENCRYPTION_KEY) {
 
 if (!ALCHEMY_API_KEY) {
   throw new Error("ALCHEMY_API_KEY must be set");
+}
+
+// Validate poll interval
+const DEFAULT_POLL_INTERVAL = 30; // seconds
+const pollIntervalSeconds = POLL_INTERVAL_SECONDS
+  ? parseInt(POLL_INTERVAL_SECONDS, 10)
+  : DEFAULT_POLL_INTERVAL;
+
+if (
+  isNaN(pollIntervalSeconds) ||
+  pollIntervalSeconds < 10 ||
+  pollIntervalSeconds > 5000
+) {
+  console.log(
+    `Invalid POLL_INTERVAL_SECONDS (${POLL_INTERVAL_SECONDS}), using default of ${DEFAULT_POLL_INTERVAL} seconds`,
+  );
 }
 
 const signer = createSigner(WALLET_KEY);
@@ -136,6 +153,68 @@ async function sendWelcomeMessage(
   }
 }
 
+// Add introduction message helper
+async function sendIntroductionMessage(
+  client: Client,
+  conversation: Conversation,
+) {
+  const introText =
+    "👋 Hello! I'm a helpful bot that can assist with various tasks in this group.\n\n" +
+    "Here are some key things I can help with:\n\n" +
+    "🔔 **Transaction Alerts**\n" +
+    "- Use `/addFollow 0x...` to get notified when an address sends transactions\n" +
+    "- Use `/startWatching` to begin monitoring (supports ETH_MAINNET, BASE_MAINNET, BASE_SEPOLIA)\n\n" +
+    "👥 **Group Management**\n" +
+    "- Use `/setWelcomeMessage` to set up automatic welcome DMs for new members\n" +
+    "- Use `/setSendWelcome 1` to enable welcome messages\n" +
+    "- Use `/kickMe` to remove yourself from the group\n\n" +
+    "📌 **Message Storage**\n" +
+    "- Use `/storeMessage` to save important information\n" +
+    "- Use `/loadMessage` to recall the stored message\n\n" +
+    "Type `/help` to see all available commands!\n\n" +
+    "I'm here to help make this group more useful and fun! 🤖✨";
+
+  await conversation.send(introText);
+}
+
+// Add polling helper
+async function pollForNewConversations(client: Client) {
+  try {
+    // Sync to get latest conversations
+    await client.conversations.sync();
+    const currentConversations = client.conversations.list();
+    console.log(
+      `Polling for new convos. Found ${currentConversations.length} conversations`,
+    );
+
+    for (const conversation of currentConversations) {
+      // Skip if we already know about this conversation
+      if (conversationStates.has(conversation.id)) {
+        continue;
+      }
+
+      // Check if we're a member
+      const members = await conversation.members();
+      const isInGroup = members.some((m) => m.inboxId === client.inboxId);
+      const isSuperAdmin = conversation.isSuperAdmin(client.inboxId);
+
+      if (isInGroup) {
+        console.log("Found new conversation we're in:", conversation.id);
+        await initializeConversationState(client, conversation);
+        if (isSuperAdmin) {
+          console.log(
+            "we're a super admin, skipping introduction since I created this chat",
+          );
+        } else {
+          await sendIntroductionMessage(client, conversation);
+        }
+      }
+    }
+  } catch (error) {
+    console.error("Error polling for new conversations:", error);
+  }
+}
+
 async function main() {
   console.log(`Creating client on the '${env}' network...`);
   const client = await Client.create(signer, encryptionKey, { env });
@@ -146,9 +225,38 @@ async function main() {
   const conversations = client.conversations.list();
   console.log(`i have ${conversations.length} conversations`);
 
+  // Initialize state for existing conversations
+  for (const conversation of conversations) {
+    if (!conversationStates.has(conversation.id)) {
+      await initializeConversationState(client, conversation);
+    }
+  }
+
   console.log(
     `Agent initialized on ${client.accountAddress}\nSend a message on http://xmtp.chat/dm/${client.accountAddress}`,
   );
+
+  // Start polling for new conversations
+  const pollIntervalMs =
+    Math.max(
+      Math.min(
+        isNaN(pollIntervalSeconds)
+          ? DEFAULT_POLL_INTERVAL
+          : pollIntervalSeconds,
+        5000,
+      ),
+      10,
+    ) * 1000; // Convert to milliseconds
+
+  console.log(
+    `Starting conversation polling with interval of ${pollIntervalMs / 1000} seconds`,
+  );
+
+  setInterval(() => {
+    pollForNewConversations(client).catch((error: unknown) => {
+      console.error("Error in polling interval:", error);
+    });
+  }, pollIntervalMs);
 
   console.log("Waiting for messages...");
   const stream = client.conversations.streamAllMessages();
@@ -165,7 +273,25 @@ async function main() {
     }
 
     if (ContentTypeGroupUpdated.sameAs(message.contentType)) {
-      console.log("group update", message);
+      console.log("group update to group", message.conversationId);
+
+      const conversation = client.conversations.getConversationById(
+        message.conversationId,
+      );
+
+      if (!conversation) {
+        console.log("Unable to find conversation for group update, skipping");
+        continue;
+      }
+
+      // Check if this is a removal update
+      const members = await conversation.members();
+      const isStillInGroup = members.some((m) => m.inboxId === client.inboxId);
+
+      if (!isStillInGroup && conversationStates.has(conversation.id)) {
+        console.log("We were removed from the group, cleaning up state");
+        conversationStates.delete(conversation.id);
+      }
       continue;
     }
 
@@ -202,7 +328,7 @@ async function main() {
     if (contentLower === "/help") {
       const helpText =
         "**XMTP Bot Commands**\n\n" +
-        "```\nAvailable commands:\n\n" +
+        "\nAvailable commands:\n\n" +
         "/help                    - Show this help message\n" +
         "/createDm                - Create a private DM chat with the bot\n" +
         "/createSideChannel       - Create a private group chat with 5 minute message expiry\n" +
@@ -221,8 +347,8 @@ async function main() {
         "/listFollows             - Show all addresses you're following\n" +
         "/startWatching [network] - Start watching transactions (network: ETH_MAINNET, BASE_MAINNET, BASE_SEPOLIA)\n" +
         "/stopWatching           - Stop watching transactions\n" +
-        "```\n\n" +
-        "💡 _This bot is based on https://github.com/ephemeraHQ/xmtp-agent-examples - build your own!_";
+        "\n\n" +
+        "💡 This bot is based on https://github.com/ephemeraHQ/xmtp-agent-examples - start building your own!";
       await conversation.send(helpText);
       continue;
     }
